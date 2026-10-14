@@ -2,8 +2,8 @@
 
 `anchorpoint` is the default branch and contains the custom changes. The GitHub
 fork retains the upstream history; `upstream` points to DeedleFake/Trayscale.
-The current base is upstream `v0.20.0`. The first fork release is
-`v0.20.0-anchorpoint.1`, packaged as `trayscale-anchorpoint 0.20.0-1`.
+The current base is upstream `v0.20.0`. The current fork release is
+`v0.20.0-anchorpoint.2`, packaged as `trayscale-anchorpoint 0.20.0-2`.
 
 ## Updating to an upstream release
 
