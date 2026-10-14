@@ -44,6 +44,34 @@
 				destination is configured.
 			</description>
 		</key>
+		<key name="auto-switch-exit-node" type="b">
+			<default>false</default>
+			<summary>Check Mullvad exit-node connectivity</summary>
+			<description>
+				If enabled, Trayscale manages a specific Mullvad exit node, checks
+				real internet connectivity through it, and switches when that path
+				appears unhealthy. This is separate from Tailscale Automatic mode.
+			</description>
+		</key>
+		<key name="auto-switch-threshold" type="d">
+			<default>10</default>
+			<range min="10" max="120"/>
+			<summary>Seconds of confirmed failure before switching</summary>
+			<description>
+				How long active exit-path probes must continuously fail before
+				Trayscale attempts to switch to another Mullvad exit node.
+			</description>
+		</key>
+		<key name="auto-switch-probe-interval" type="d">
+			<default>60</default>
+			<range min="10" max="3600"/>
+			<summary>Seconds between exit-path probes</summary>
+			<description>
+				How often Trayscale performs a lightweight TCP health check
+				through the selected Mullvad exit node. DNS is also checked when
+				Tailscale DNS is enabled.
+			</description>
+		</key>
 	</schema>
 </schemalist>
 

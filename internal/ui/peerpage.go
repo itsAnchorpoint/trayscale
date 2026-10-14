@@ -91,7 +91,7 @@ func (page *PeerPage) init(a *App, status *tsutil.IPNStatus, peer tailcfg.NodeVi
 			open, finish = dialog.SelectMultipleFolders, dialog.SelectMultipleFoldersFinish
 		}
 
-		dialog.SetTitle(locale.Get("Select %v(s) to send to %v", mode, page.peer.Hostinfo().Hostname()))
+		dialog.SetTitle(locale.Get("Select %v(s) to send to %v", mode, peerHostname(page.peer)))
 
 		open(context.TODO(), &a.win.MainWindow.Window, func(res gio.AsyncResulter) {
 			files, err := finish(res)
@@ -190,24 +190,25 @@ func (page *PeerPage) init(a *App, status *tsutil.IPNStatus, peer tailcfg.NodeVi
 			return false
 		}
 
-		if s {
-			err := tsutil.AdvertiseExitNode(context.TODO(), false)
-			if err != nil {
-				slog.Error("disable exit node advertisement", "err", err)
-				// Continue anyways.
-			}
-		}
-
 		var node tailcfg.StableNodeID
 		if s {
 			node = page.peer.StableID()
 		}
-		err := tsutil.ExitNode(context.TODO(), node)
-		if err != nil {
-			slog.Error("set exit node", "err", err)
-			page.ExitNodeRow.ActivatableWidget().(*gtk.Switch).SetActive(!s)
-			return true
-		}
+		page.ExitNodeRow.SetSensitive(false)
+		page.app.runExitNodeChange(func(ctx context.Context) error {
+			if s {
+				if err := tsutil.AdvertiseExitNode(ctx, false); err != nil {
+					slog.Error("disable exit node advertisement", "err", err)
+				}
+			}
+			return page.app.setSpecificExitNode(ctx, node)
+		}, func(err error) {
+			page.ExitNodeRow.SetSensitive(true)
+			if err != nil {
+				slog.Error("set exit node", "err", err)
+				page.ExitNodeRow.ActivatableWidget().(*gtk.Switch).SetActive(page.ExitNodeRow.ActivatableWidget().(*gtk.Switch).State())
+			}
+		})
 		return true
 	})
 }
@@ -266,7 +267,7 @@ func (page *PeerPage) Update(s tsutil.Status) bool {
 	}
 	page.stackPage.SetNeedsAttention(exitNode)
 
-	page.Page.SetTitle(page.peer.Hostinfo().Hostname())
+	page.Page.SetTitle(peerHostname(page.peer))
 	page.Page.SetDescription(page.peer.Name())
 
 	page.ExitNodeRow.SetVisible(exitNodeOption)
@@ -302,6 +303,16 @@ func peerName(peer tailcfg.NodeView) string {
 		return ""
 	}
 	return peer.DisplayName(true)
+}
+
+func peerHostname(peer tailcfg.NodeView) string {
+	if !peer.Valid() {
+		return ""
+	}
+	if hi := peer.Hostinfo(); hi.Valid() && hi.Hostname() != "" {
+		return hi.Hostname()
+	}
+	return strings.TrimSuffix(peer.Name(), ".")
 }
 
 func peerIsExitNodeOption(peer tailcfg.NodeView) bool {

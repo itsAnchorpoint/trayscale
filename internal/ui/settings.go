@@ -2,6 +2,8 @@ package ui
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 	"tailscale.com/ipn"
+	"tailscale.com/tailcfg"
 )
 
 func (a *App) initSettings(ctx context.Context) {
@@ -56,8 +59,12 @@ func (a *App) initSettings(ctx context.Context) {
 					a.win.SetShowOffline(a.settings.Boolean("show-offline-peers"))
 				}
 			})
+
+		case "auto-switch-exit-node", "auto-switch-threshold", "auto-switch-probe-interval":
+			a.updateAutoSwitchSettings()
 		}
 	})
+	a.updateAutoSwitchSettings()
 
 	a.runSettings(ctx)
 }
@@ -171,6 +178,8 @@ func (a *App) showPreferences() {
 		})
 	})
 
+	a.settings.Bind("auto-switch-threshold", dialog.AutoSwitchThresholdAdjustment.Object, "value", gio.SettingsBindDefault)
+	a.settings.Bind("auto-switch-probe-interval", dialog.AutoSwitchProbeIntervalAdjustment.Object, "value", gio.SettingsBindDefault)
 	dialog.PreferencesDialog.Present(a.window())
 }
 
@@ -202,4 +211,64 @@ func (a *App) getInterval() time.Duration {
 		return 5 * time.Second
 	}
 	return time.Duration(a.settings.Double("polling-interval") * float64(time.Second))
+}
+
+func (a *App) updateAutoSwitchSettings() {
+	if a.settings == nil {
+		return
+	}
+
+	if a.poller != nil {
+		a.poller.SetAutoSwitch(tsutil.AutoSwitchConfig{
+			Enabled:       a.settings.Boolean("auto-switch-exit-node"),
+			Threshold:     time.Duration(a.settings.Double("auto-switch-threshold") * float64(time.Second)),
+			ProbeInterval: time.Duration(a.settings.Double("auto-switch-probe-interval") * float64(time.Second)),
+		})
+	}
+}
+
+func (a *App) setHealthChecksEnabled(enabled bool) {
+	if a.settings != nil {
+		if !a.settings.SetBoolean("auto-switch-exit-node", enabled) {
+			a.updateAutoSwitchSettings()
+		}
+	}
+}
+
+func (a *App) setExitNodeMode(ctx context.Context, mode tsutil.ExitNodeMode) error {
+	var err error
+	switch mode {
+	case tsutil.ExitNodeModeAutomatic:
+		err = a.poller.SetAutomaticExitNode(ctx)
+	case tsutil.ExitNodeModeHealthChecked:
+		if a.settings == nil {
+			return errors.New("settings schema not found")
+		}
+		err = a.poller.SetHealthCheckedExitNode(ctx)
+	case tsutil.ExitNodeModeSpecific:
+		err = a.poller.SetSpecificExitNodeMode(ctx)
+	default:
+		return fmt.Errorf("unsupported exit-node mode %q", mode)
+	}
+	if err != nil {
+		return err
+	}
+	a.setHealthChecksEnabled(mode == tsutil.ExitNodeModeHealthChecked)
+	return nil
+}
+
+func (a *App) setSpecificExitNode(ctx context.Context, id tailcfg.StableNodeID) error {
+	if err := a.poller.ExitNode(ctx, id); err != nil {
+		return err
+	}
+	a.setHealthChecksEnabled(false)
+	return nil
+}
+
+func (a *App) setUseExitNode(ctx context.Context, use bool) error {
+	if err := a.poller.SetUseExitNode(ctx, use); err != nil {
+		return err
+	}
+	a.setHealthChecksEnabled(false)
+	return nil
 }

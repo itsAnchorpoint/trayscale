@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"sync"
 
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
@@ -27,6 +28,7 @@ var (
 		NetMon: monitor,
 		Logf:   logger.Discard,
 	}
+	exitNodeMu sync.Mutex
 )
 
 func initMonitor() *netmon.Monitor {
@@ -55,46 +57,119 @@ func Stop(ctx context.Context) error {
 // ExitNode uses the specified peer as an exit node, or unsets
 // an existing exit node if peer is an empty string.
 func ExitNode(ctx context.Context, peer tailcfg.StableNodeID) error {
-	if peer == "" {
-		var prefs ipn.Prefs
-		prefs.ClearExitNode()
-		_, err := localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
-			Prefs:         prefs,
-			ExitNodeIDSet: true,
-			ExitNodeIPSet: true,
-		})
-		if err != nil {
-			return fmt.Errorf("edit prefs: %w", err)
-		}
-		return nil
-	}
+	exitNodeMu.Lock()
+	defer exitNodeMu.Unlock()
+	return editExitNode(ctx, peer)
+}
 
-	prefs := ipn.Prefs{
-		ExitNodeID: peer,
-	}
-	_, err := localClient.EditPrefs(ctx, &ipn.MaskedPrefs{
-		Prefs:         prefs,
-		ExitNodeIDSet: true,
-	})
+func editExitNode(ctx context.Context, peer tailcfg.StableNodeID) error {
+	prefs, err := localClient.EditPrefs(ctx, specificExitNodeMaskedPrefs(peer))
 	if err != nil {
 		return fmt.Errorf("edit prefs: %w", err)
+	}
+	if prefs == nil {
+		return errors.New("tailscaled returned no preferences")
+	}
+	if prefs.AutoExitNode.IsSet() || prefs.ExitNodeID != peer || prefs.ExitNodeIP.IsValid() {
+		return errors.New("tailscaled did not apply the requested specific exit node")
 	}
 
 	return nil
 }
 
+// SetAutomaticExitNode lets tailscaled persistently select any exit node
+// permitted by the current tailnet policy.
+func SetAutomaticExitNode(ctx context.Context) error {
+	exitNodeMu.Lock()
+	defer exitNodeMu.Unlock()
+
+	prefs, err := localClient.EditPrefs(ctx, automaticExitNodeMaskedPrefs())
+	if err != nil {
+		return fmt.Errorf("enable automatic exit node: %w", err)
+	}
+	if prefs == nil {
+		return errors.New("tailscaled returned no preferences")
+	}
+	if prefs.AutoExitNode != ipn.AnyExitNode {
+		return errors.New("tailscaled did not enable automatic exit-node selection")
+	}
+	return nil
+}
+
+func disableAutomaticExitNode(ctx context.Context, expected tailcfg.StableNodeID) error {
+	exitNodeMu.Lock()
+	defer exitNodeMu.Unlock()
+
+	current, err := localClient.GetPrefs(ctx)
+	if err != nil {
+		return fmt.Errorf("get prefs: %w", err)
+	}
+	if current == nil {
+		return errors.New("tailscaled returned no preferences")
+	}
+	if expected != "" && current.ExitNodeID != expected {
+		return errors.New("exit node changed before automatic mode could be disabled")
+	}
+	if !current.AutoExitNode.IsSet() {
+		return nil
+	}
+
+	prefs, err := localClient.EditPrefs(ctx, disableAutomaticExitNodeMaskedPrefs())
+	if err != nil {
+		return fmt.Errorf("disable automatic exit node: %w", err)
+	}
+	if prefs == nil {
+		return errors.New("tailscaled returned no preferences")
+	}
+	if prefs.AutoExitNode.IsSet() || prefs.ExitNodeID != current.ExitNodeID || prefs.ExitNodeIP != current.ExitNodeIP {
+		return errors.New("tailscaled did not preserve the selected exit node")
+	}
+	return nil
+}
+
+func setExitNodeAutomatic(ctx context.Context, peer, expected tailcfg.StableNodeID, valid func() bool) error {
+	exitNodeMu.Lock()
+	defer exitNodeMu.Unlock()
+	if !valid() {
+		return context.Canceled
+	}
+	prefs, err := localClient.GetPrefs(ctx)
+	if err != nil {
+		return fmt.Errorf("get prefs before automatic exit-node update: %w", err)
+	}
+	if prefs == nil {
+		return errors.New("tailscaled returned no preferences")
+	}
+	if prefs.AutoExitNode.IsSet() || prefs.ExitNodeIP.IsValid() || prefs.ExitNodeID != expected {
+		return errors.New("exit-node mode changed before automatic update")
+	}
+	if !valid() {
+		return context.Canceled
+	}
+	return editExitNode(ctx, peer)
+}
+
 func SetUseExitNode(ctx context.Context, use bool) error {
+	exitNodeMu.Lock()
+	defer exitNodeMu.Unlock()
 	useErr := localClient.SetUseExitNode(ctx, use)
 	if useErr == nil {
 		return nil
 	}
+	if !use {
+		return useErr
+	}
 
 	suggested, suggestErr := localClient.SuggestExitNode(ctx)
 	if suggestErr == nil {
-		slog.Info("got suggested exit node", "id", suggested.ID, "name", suggested.Name, "location", suggested.Location)
-		suggestErr = ExitNode(ctx, suggested.ID)
-		if suggestErr == nil {
-			return nil
+		if suggested.ID == "" {
+			suggestErr = errors.New("tailscaled did not suggest an exit node")
+		} else {
+			slog.Info("got suggested exit node", "id", suggested.ID, "name", suggested.Name, "location", suggested.Location)
+			suggestErr = editExitNode(ctx, suggested.ID)
+			if suggestErr == nil {
+				return nil
+			}
 		}
 	}
 

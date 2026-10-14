@@ -30,6 +30,7 @@ var (
 	selfHandle       = unique.Make("self")
 	connToggleHandle = unique.Make("connToggle")
 	exitToggleHandle = unique.Make("exitToggle")
+	autoSwitchHandle = unique.Make("autoSwitch")
 	statusIconHandle = unique.Make("statusIcon")
 )
 
@@ -62,17 +63,17 @@ type Tray struct {
 	showItem       *tray.MenuItem
 	connToggleItem *tray.MenuItem
 	exitToggleItem *tray.MenuItem
+	autoSwitchItem *tray.MenuItem
 	selfNodeItem   *tray.MenuItem
 	quitItem       *tray.MenuItem
 }
 
 func (t *Tray) Start(status *tsutil.IPNStatus) error {
+	t.m.Lock()
+	defer t.m.Unlock()
 	if t.item != nil {
 		return nil
 	}
-
-	t.m.Lock()
-	defer t.m.Unlock()
 
 	item, err := tray.New(
 		tray.ItemID("dev.deedles.Trayscale"),
@@ -94,6 +95,7 @@ func (t *Tray) Start(status *tsutil.IPNStatus) error {
 	menu.AddChild(tray.MenuItemType(tray.Separator))
 	t.connToggleItem, _ = menu.AddChild(handler(t.OnConnToggle))
 	t.exitToggleItem, _ = menu.AddChild(handler(t.OnExitToggle))
+	t.autoSwitchItem, _ = menu.AddChild(tray.MenuItemEnabled(false))
 	t.selfNodeItem, _ = menu.AddChild(handler(t.OnSelfNode))
 	menu.AddChild(tray.MenuItemType(tray.Separator))
 	t.quitItem, _ = menu.AddChild(tray.MenuItemLabel(locale.Get("Quit")), handler(t.OnQuit))
@@ -155,6 +157,7 @@ func (t *Tray) update(status *tsutil.IPNStatus) {
 	selfTitle, connected := selfTitle(status)
 	connToggleLabel := connToggleText(status.Online())
 	exitToggleLabel := exitToggleText(status)
+	autoSwitchLabel := autoSwitchText(status)
 
 	t.updateStatusIcon(status)
 
@@ -173,6 +176,13 @@ func (t *Tray) update(status *tsutil.IPNStatus) {
 		t.exitToggleItem.SetProps(
 			tray.MenuItemLabel(exitToggleLabel),
 			tray.MenuItemEnabled(connected),
+		)
+	}
+
+	if t.dirty(autoSwitchHandle, autoSwitchLabel) {
+		_ = t.autoSwitchItem.SetProps(
+			tray.MenuItemLabel(autoSwitchLabel),
+			tray.MenuItemEnabled(false),
 		)
 	}
 }
@@ -224,4 +234,24 @@ func exitToggleText(status *tsutil.IPNStatus) string {
 	}
 
 	return locale.Get("Enable exit node")
+}
+
+func autoSwitchText(status *tsutil.IPNStatus) string {
+	current := "none"
+	if exitNode := status.ExitNode(); exitNode.Valid() {
+		current = exitNode.DisplayName(true)
+		if hi := exitNode.Hostinfo(); hi.Valid() && hi.Hostname() != "" {
+			current = hi.Hostname()
+		}
+	}
+	switch status.ExitNodeMode() {
+	case tsutil.ExitNodeModeAutomatic:
+		return fmt.Sprintf("Exit node: Automatic - %s", current)
+	case tsutil.ExitNodeModeHealthChecked:
+		return fmt.Sprintf("Exit node: %s - connection checks active", current)
+	case tsutil.ExitNodeModeSpecific:
+		return fmt.Sprintf("Exit node: %s", current)
+	default:
+		return "Exit node: Off"
+	}
 }

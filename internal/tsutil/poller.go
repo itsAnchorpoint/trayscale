@@ -3,7 +3,7 @@ package tsutil
 import (
 	"context"
 	"errors"
-	"io"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net/netip"
@@ -42,6 +42,8 @@ type Poller struct {
 	getIPN   chan *IPNStatus
 	nextIPN  chan *IPNStatus
 	interval chan time.Duration
+
+	autoSwitch *AutoSwitchManager
 }
 
 func (p *Poller) init() {
@@ -50,6 +52,7 @@ func (p *Poller) init() {
 		p.getIPN = make(chan *IPNStatus)
 		p.nextIPN = make(chan *IPNStatus)
 		p.interval = make(chan time.Duration)
+		p.autoSwitch = NewAutoSwitchManager()
 	})
 }
 
@@ -62,12 +65,24 @@ func (p *Poller) Run(ctx context.Context) {
 	p.init()
 
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	var workers sync.WaitGroup
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
 
 	n := newNotifier()
-	go p.watchIPN(ctx)
-	go p.watchFiles(ctx, n)
-	go p.watchProfiles(ctx, n)
+	run := func(f func(context.Context)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			f(ctx)
+		}()
+	}
+	run(p.autoSwitch.Run)
+	run(p.watchIPN)
+	run(func(ctx context.Context) { p.watchFiles(ctx, n) })
+	run(func(ctx context.Context) { p.watchProfiles(ctx, n) })
 
 	interval := p.Interval
 	if interval <= 0 {
@@ -94,56 +109,77 @@ func (p *Poller) Run(ctx context.Context) {
 }
 
 func (p *Poller) watchIPN(ctx context.Context) {
-	const watcherOpts = ipn.NotifyInitialState |
-		ipn.NotifyInitialPrefs |
-		ipn.NotifyWatchEngineUpdates |
-		ipn.NotifyInitialStatus |
-		ipn.NotifyPeerChanges
-
-watch:
-	if ctx.Err() != nil {
-		return
-	}
-	watcher, err := localClient.WatchIPNBus(ctx, watcherOpts)
-	if err != nil {
-		slog.Error("start IPN bus watcher", "err", err)
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(5 * time.Second):
-			goto watch
-		}
-	}
-	defer watcher.Close()
-
 	set := make(chan *IPNStatus)
+	stateWorkerDone := make(chan struct{})
 	go func() {
+		defer close(stateWorkerDone)
 		var get chan *IPNStatus
 		var s *IPNStatus
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case s = <-set:
+			case next := <-set:
+				s = next.copy()
+				s.AutoSwitch = p.autoSwitch.Runtime()
 				get = p.getIPN
-				p.New(s)
+				p.publish(s)
+			case runtime := <-p.autoSwitch.RuntimeUpdates():
+				if s != nil {
+					s = s.copy()
+					s.AutoSwitch = runtime
+					p.publish(s)
+					select {
+					case p.nextIPN <- s:
+					default:
+					}
+				}
 			case get <- s:
 			}
 		}
 	}()
+	defer func() { <-stateWorkerDone }()
+
+	for {
+		err := p.watchIPNBus(ctx, set)
+		if ctx.Err() != nil {
+			return
+		}
+		p.autoSwitch.DaemonUnavailable()
+		unavailable := &IPNStatus{AutoSwitch: p.autoSwitch.Runtime()}
+		select {
+		case <-ctx.Done():
+			return
+		case set <- unavailable:
+		}
+		slog.Error("IPN bus watcher stopped", "err", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+func (p *Poller) watchIPNBus(ctx context.Context, set chan<- *IPNStatus) error {
+	const watcherOpts = ipn.NotifyInitialState |
+		ipn.NotifyInitialPrefs |
+		ipn.NotifyWatchEngineUpdates |
+		ipn.NotifyInitialStatus |
+		ipn.NotifyPeerChanges
+
+	watcher, err := localClient.WatchIPNBus(ctx, watcherOpts)
+	if err != nil {
+		return fmt.Errorf("start IPN bus watcher: %w", err)
+	}
+	defer func() { _ = watcher.Close() }()
 
 	var s IPNStatus
+	var targetsPending bool
 	for {
 		notify, err := watcher.Next()
 		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				goto watch
-			}
-			slog.Error("get next IPN bus notification", "err", err)
-			continue
+			return err
 		}
 
 		if notify.ErrMessage != nil {
@@ -155,25 +191,35 @@ watch:
 		}
 
 		dirty, targetsDirty := s.applyNotify(&notify)
+		if notify.State != nil && *notify.State == ipn.NoState {
+			targetsPending = false
+		}
 		if targetsDirty {
-			s.refreshFileTargets(ctx)
+			clear(s.FileTargets)
+		}
+		targetsPending = targetsPending || targetsDirty
+		if targetsPending && s.refreshFileTargets(ctx) {
+			targetsPending = false
+			dirty = true
 		}
 
 		// TODO: Handle health warnings.
 		if !dirty {
 			continue
 		}
+		p.autoSwitch.UpdateStatus(s.copy())
 
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-p.poll:
 		}
 
 		c := s.copy()
+		c.AutoSwitch = p.autoSwitch.Runtime()
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case set <- c:
 		}
 		select {
@@ -194,7 +240,7 @@ func (p *Poller) watchFiles(ctx context.Context, n *notifier) {
 			goto wait
 		}
 
-		p.New(&FileStatus{Files: files})
+		p.publish(&FileStatus{Files: files})
 
 	wait:
 		select {
@@ -217,7 +263,7 @@ func (p *Poller) watchProfiles(ctx context.Context, n *notifier) {
 			goto wait
 		}
 
-		p.New(&ProfileStatus{Profile: profile, Profiles: profiles})
+		p.publish(&ProfileStatus{Profile: profile, Profiles: profiles})
 
 	wait:
 		select {
@@ -267,6 +313,151 @@ func (p *Poller) SetInterval() chan<- time.Duration {
 	return p.interval
 }
 
+func (p *Poller) publish(status Status) {
+	if p.New != nil {
+		p.New(status)
+	}
+}
+
+func (p *Poller) SetAutoSwitch(config AutoSwitchConfig) {
+	p.init()
+	p.autoSwitch.SetConfig(config)
+}
+
+func (p *Poller) AutoSwitchOverrides() <-chan struct{} {
+	p.init()
+	return p.autoSwitch.Overrides()
+}
+
+func (p *Poller) SetAutomaticExitNode(ctx context.Context) error {
+	p.init()
+	if err := p.autoSwitch.Pause(ctx); err != nil {
+		return err
+	}
+	if err := SetAutomaticExitNode(ctx); err != nil {
+		p.resumeAutoSwitch()
+		return err
+	}
+	return nil
+}
+
+func (p *Poller) SetHealthCheckedExitNode(ctx context.Context) error {
+	p.init()
+	if err := p.autoSwitch.Pause(ctx); err != nil {
+		return err
+	}
+
+	var status *IPNStatus
+	select {
+	case <-ctx.Done():
+		p.resumeAutoSwitch()
+		return ctx.Err()
+	case status = <-p.GetIPN():
+	}
+	if status == nil || !status.Online() {
+		p.resumeAutoSwitch()
+		return errors.New("tailscale is not running")
+	}
+	owner, ok := autoSwitchStatusOwner(status)
+	if !ok {
+		p.resumeAutoSwitch()
+		return errors.New("complete Tailscale status is unavailable")
+	}
+
+	peer, err := selectInitialMullvadCandidate(ctx, localAutoSwitchOps{}, status, time.Now())
+	if err != nil {
+		p.resumeAutoSwitch()
+		return err
+	}
+	if status.Prefs.ExitNodeID() == peer.StableID() {
+		err = disableAutomaticExitNode(ctx, peer.StableID())
+	} else {
+		err = ExitNode(ctx, peer.StableID())
+	}
+	if err != nil {
+		p.resumeAutoSwitch()
+		return err
+	}
+
+	return p.autoSwitch.resumeWhenSpecific(ctx, peer.StableID(), owner)
+}
+
+func (p *Poller) SetSpecificExitNodeMode(ctx context.Context) error {
+	p.init()
+	if err := p.autoSwitch.Pause(ctx); err != nil {
+		return err
+	}
+
+	var status *IPNStatus
+	select {
+	case <-ctx.Done():
+		p.resumeAutoSwitch()
+		return ctx.Err()
+	case status = <-p.GetIPN():
+	}
+	if status == nil || !status.Prefs.Valid() || !status.Prefs.AutoExitNode().IsSet() {
+		return nil
+	}
+	id := status.Prefs.ExitNodeID()
+	if id == "" {
+		p.resumeAutoSwitch()
+		return errors.New("tailscale has not selected an automatic exit node yet")
+	}
+	if _, ok := status.Peers[id]; !ok {
+		p.resumeAutoSwitch()
+		return errors.New("the automatic exit node is not available yet")
+	}
+	if err := disableAutomaticExitNode(ctx, id); err != nil {
+		p.resumeAutoSwitch()
+		return err
+	}
+	return nil
+}
+
+func (p *Poller) resumeAutoSwitch() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := p.autoSwitch.Resume(ctx); err != nil {
+		slog.Error("resume exit-node connection checks", "err", err)
+	}
+}
+
+func (p *Poller) ExitNode(ctx context.Context, peer tailcfg.StableNodeID) error {
+	p.init()
+	if err := p.autoSwitch.Pause(ctx); err != nil {
+		return err
+	}
+	if err := ExitNode(ctx, peer); err != nil {
+		p.resumeAutoSwitch()
+		return err
+	}
+	return nil
+}
+
+func (p *Poller) SetUseExitNode(ctx context.Context, use bool) error {
+	p.init()
+	if err := p.autoSwitch.Pause(ctx); err != nil {
+		return err
+	}
+	if err := SetUseExitNode(ctx, use); err != nil {
+		p.resumeAutoSwitch()
+		return err
+	}
+	return nil
+}
+
+func (p *Poller) SwitchProfile(ctx context.Context, id ipn.ProfileID) error {
+	p.init()
+	if err := p.autoSwitch.Pause(ctx); err != nil {
+		return err
+	}
+	if err := SwitchProfile(ctx, id); err != nil {
+		p.resumeAutoSwitch()
+		return err
+	}
+	return nil
+}
+
 type Status interface {
 	status()
 }
@@ -278,6 +469,7 @@ type IPNStatus struct {
 	Peers       map[tailcfg.StableNodeID]tailcfg.NodeView
 	FileTargets set.Set[tailcfg.StableNodeID]
 	Engine      *ipn.EngineStatus
+	AutoSwitch  AutoSwitchRuntime
 	BrowseToURL string
 }
 
@@ -295,12 +487,17 @@ func (s *IPNStatus) ensurePeers() {
 	}
 }
 
-// applyNotify applies notify. targetsDirty is true when Taildrop eligibility
-// may have changed: bootstrap, peer add/remove, or self identity change.
-// Online-only upserts do not set it; FileTargets does not depend on Online.
+// applyNotify applies notify. targetsDirty reports that Taildrop eligibility
+// may have changed.
 func (s *IPNStatus) applyNotify(notify *ipn.Notify) (dirty, targetsDirty bool) {
 	if notify.State != nil {
-		s.State = *notify.State
+		state := *notify.State
+		if state == ipn.NoState {
+			// Profile switches keep the bus session but do not send removals for
+			// the previous profile's self and peers.
+			*s = IPNStatus{}
+		}
+		s.State = state
 		dirty = true
 	}
 	if notify.Prefs != nil && notify.Prefs.Valid() {
@@ -323,11 +520,13 @@ func (s *IPNStatus) applyNotify(notify *ipn.Notify) (dirty, targetsDirty bool) {
 	}
 	if notify.SelfChange != nil {
 		dirty = true
-		targetsDirty = s.applySelfChange(notify.SelfChange) || targetsDirty
+		s.applySelfChange(notify.SelfChange)
+		targetsDirty = true
 	}
 	if len(notify.PeersChanged) != 0 {
 		dirty = true
-		targetsDirty = s.applyPeersChanged(notify.PeersChanged) || targetsDirty
+		s.applyPeersChanged(notify.PeersChanged)
+		targetsDirty = true
 	}
 	if len(notify.PeersRemoved) != 0 {
 		dirty = true
@@ -397,24 +596,24 @@ func (s *IPNStatus) applyPeersRemoved(ids []tailcfg.NodeID) (removed bool) {
 	return removed
 }
 
-func (s *IPNStatus) refreshFileTargets(ctx context.Context) {
+func (s *IPNStatus) refreshFileTargets(ctx context.Context) bool {
 	// This is a lot longer than it probably should be. It's basically
 	// just to make sure that the poller doesn't get completely stuck. If
 	// this is getting hit, though, the UI is going to be updating
 	// horribly slow.
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-
 	targets, err := FileTargets(ctx)
 	if err != nil {
 		slog.Error("failed to get file targets", "err", err)
-		return
+		return false
 	}
 	s.FileTargets.Make()
 	clear(s.FileTargets)
 	for _, target := range targets {
 		s.FileTargets.Add(target.Node.StableID)
 	}
+	return true
 }
 
 // nodeViewFromPeerStatus builds a NodeView from an ipnstate.PeerStatus for
@@ -475,18 +674,24 @@ func nodeViewFromPeerStatus(ps *ipnstate.PeerStatus, magicDNSSuffix string) tail
 // Online returns true if s indicates that the local node is online
 // and connected to the tailnet.
 func (s *IPNStatus) Online() bool {
-	return s.State == ipn.Running
+	return s != nil && s.State == ipn.Running
 }
 
 func (s *IPNStatus) NeedsAuth() bool {
-	return s.State == ipn.NeedsLogin
+	return s != nil && s.State == ipn.NeedsLogin
 }
 
 func (s *IPNStatus) ExitNodeActive() bool {
+	if s == nil || !s.Prefs.Valid() {
+		return false
+	}
 	return s.Prefs.ExitNodeID() != "" || s.Prefs.ExitNodeIP().IsValid()
 }
 
 func (s *IPNStatus) ExitNode() tailcfg.NodeView {
+	if s == nil || !s.Prefs.Valid() {
+		return tailcfg.NodeView{}
+	}
 	if node, ok := s.Peers[s.Prefs.ExitNodeID()]; ok {
 		return node
 	}
@@ -508,6 +713,9 @@ func (s *IPNStatus) peerByTailscaleIP(ip netip.Addr) tailcfg.NodeView {
 }
 
 func (s *IPNStatus) OperatorIsCurrent() bool {
+	if s == nil || !s.Prefs.Valid() {
+		return false
+	}
 	current, err := user.Current()
 	if err != nil {
 		slog.Error("get current user", "err", err)
@@ -520,6 +728,9 @@ func (s *IPNStatus) OperatorIsCurrent() bool {
 // Self returns the local node. The boolean is false when the node is
 // missing or invalid.
 func (s *IPNStatus) Self() (tailcfg.NodeView, bool) {
+	if s == nil {
+		return tailcfg.NodeView{}, false
+	}
 	n := s.self
 	return n, n.Valid()
 }

@@ -139,15 +139,17 @@ func NewMainWindow(app *App) *MainWindow {
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		err := tsutil.SwitchProfile(ctx, profile.ID)
-		if err != nil {
-			slog.Error("failed to switch profiles", "err", err, "id", profile.ID, "name", profile.Name)
-			return
-		}
-		<-app.poller.Poll()
+		app.runExitNodeChange(func(ctx context.Context) error {
+			if err := app.poller.SwitchProfile(ctx, profile.ID); err != nil {
+				return err
+			}
+			app.setHealthChecksEnabled(false)
+			return nil
+		}, func(err error) {
+			if err != nil {
+				slog.Error("failed to switch profiles", "err", err, "id", profile.ID, "name", profile.Name)
+			}
+		})
 	})
 
 	contentVariant := glib.NewVariantString("content")

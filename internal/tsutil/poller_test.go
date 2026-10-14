@@ -124,7 +124,7 @@ func TestApplyNotifyTargetsDirty(t *testing.T) {
 		var s IPNStatus
 		s.applyNotify(&ipn.Notify{PeersChanged: []*tailcfg.Node{testPeerNode(id, 1, false)}})
 		_, targetsDirty := s.applyNotify(&ipn.Notify{PeersChanged: []*tailcfg.Node{testPeerNode(id, 1, true)}})
-		require.False(t, targetsDirty)
+		require.True(t, targetsDirty)
 		require.True(t, s.Peers[id].Online().Get())
 	})
 
@@ -147,7 +147,7 @@ func TestApplyNotifyTargetsDirty(t *testing.T) {
 	t.Run("first self", func(t *testing.T) {
 		var s IPNStatus
 		_, targetsDirty := s.applyNotify(&ipn.Notify{SelfChange: selfA})
-		require.False(t, targetsDirty)
+		require.True(t, targetsDirty)
 	})
 
 	t.Run("same identity self", func(t *testing.T) {
@@ -156,7 +156,7 @@ func TestApplyNotifyTargetsDirty(t *testing.T) {
 		renamed := testSelfNode(selfA.ID, selfA.StableID, selfA.User)
 		renamed.Name = "renamed.tailnet.ts.net."
 		_, targetsDirty := s.applyNotify(&ipn.Notify{SelfChange: renamed})
-		require.False(t, targetsDirty)
+		require.True(t, targetsDirty)
 	})
 
 	t.Run("identity change", func(t *testing.T) {
@@ -165,6 +165,29 @@ func TestApplyNotifyTargetsDirty(t *testing.T) {
 		_, targetsDirty := s.applyNotify(&ipn.Notify{SelfChange: testSelfNode(11, "self-b", 200)})
 		require.True(t, targetsDirty)
 	})
+}
+
+func TestApplyNotifyNoStateClearsProfileSnapshot(t *testing.T) {
+	oldPeer := tailcfg.StableNodeID("old")
+	s := IPNStatus{
+		State: ipn.Running,
+		Prefs: (&ipn.Prefs{ExitNodeID: oldPeer}).View(),
+		self:  testSelfNode(10, "self-a", 100).View(),
+		Peers: map[tailcfg.StableNodeID]tailcfg.NodeView{oldPeer: testPeer(oldPeer, 1, true)},
+	}
+	s.FileTargets.Make()
+	s.FileTargets.Add(oldPeer)
+
+	state := ipn.NoState
+	dirty, targetsDirty := s.applyNotify(&ipn.Notify{State: &state})
+	require.True(t, dirty)
+	require.False(t, targetsDirty)
+	require.Equal(t, ipn.NoState, s.State)
+	require.False(t, s.Prefs.Valid())
+	_, hasSelf := s.Self()
+	require.False(t, hasSelf)
+	require.Empty(t, s.Peers)
+	require.Empty(t, s.FileTargets)
 }
 
 func TestApplyNotifySelfIdentityChange(t *testing.T) {

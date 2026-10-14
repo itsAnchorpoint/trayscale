@@ -14,6 +14,17 @@ Tailscale Config
 
 Trayscale interfaces with the Tailscale daemon, `tailscaled`, to perform many of its operations. In order for this to work, the daemon must have been configured with the current user as the "operator". To do this, run `sudo tailscale set --operator=$USER` from the command-line at least once manually.
 
+Exit Node Modes
+---------------
+
+The exit-node page supports three mutually exclusive modes:
+
+* **Automatic** uses Tailscale's persistent `auto:any` selection and continues working when Trayscale is closed. It requires Tailscale 1.98.10 or newer and can choose any exit node permitted by tailnet policy.
+* **Automatic with Connection Checks** monitors real TCP egress and switches between Mullvad exit nodes after confirmed failures. Trayscale must remain running for these additional checks.
+* **Specific Exit Node** pins the selected node until it is changed manually.
+
+Manual exit-node changes always take precedence over connection checks. Trayscale does not automatically disable an exit node as part of failure recovery.
+
 Installation
 ------------
 

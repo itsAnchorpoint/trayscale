@@ -232,20 +232,22 @@ func (page *SelfPage) init(a *App, status *tsutil.IPNStatus) {
 			return false
 		}
 
-		if s {
-			err := tsutil.ExitNode(context.TODO(), "")
-			if err != nil {
-				slog.Error("disable existing exit node", "err", err)
-				// Continue anyways.
+		page.AdvertiseExitNodeRow.SetSensitive(false)
+		page.app.runExitNodeChange(func(ctx context.Context) error {
+			if s {
+				if err := page.app.setSpecificExitNode(ctx, ""); err != nil {
+					return err
+				}
 			}
-		}
-
-		err := tsutil.AdvertiseExitNode(context.TODO(), s)
-		if err != nil {
-			slog.Error("advertise exit node", "err", err)
-			page.AdvertiseExitNodeRow.ActivatableWidget().(*gtk.Switch).SetActive(!s)
-			return true
-		}
+			return tsutil.AdvertiseExitNode(ctx, s)
+		}, func(err error) {
+			page.AdvertiseExitNodeRow.SetSensitive(true)
+			if err != nil {
+				slog.Error("advertise exit node", "err", err)
+				sw := page.AdvertiseExitNodeRow.ActivatableWidget().(*gtk.Switch)
+				sw.SetActive(sw.State())
+			}
+		})
 		return true
 	})
 
@@ -430,7 +432,7 @@ func (page *SelfPage) UpdateIPN(status *tsutil.IPNStatus) bool {
 
 	page.stackPage.SetTitle(peerName(page.peer))
 
-	page.Page.SetTitle(page.peer.Hostinfo().Hostname())
+	page.Page.SetTitle(peerHostname(page.peer))
 	page.Page.SetDescription(page.peer.Name())
 
 	page.AdvertiseExitNodeRow.ActivatableWidget().(*gtk.Switch).SetState(status.Prefs.AdvertisesExitNode())

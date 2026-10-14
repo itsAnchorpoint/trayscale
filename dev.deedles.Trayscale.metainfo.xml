@@ -78,6 +78,8 @@
 					<li>Use contexts for connecting and disconnecting so operations can be cancelled.</li>
 					<li>Update Tailscale to v1.102.3 and other dependencies.</li>
 					<li>Fix some crash bugs.</li>
+					<li>Add Tailscale Automatic and health-checked Mullvad exit-node modes.</li>
+					<li>Verify replacement exit nodes and return to the previous node when recovery fails.</li>
 				</ul>
 			</description>
 		</release>

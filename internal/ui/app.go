@@ -35,6 +35,7 @@ var appCSS string
 type App struct {
 	poller *tsutil.Poller
 	online bool
+	ctx    context.Context
 
 	app      *adw.Application
 	win      *MainWindow
@@ -47,6 +48,39 @@ type App struct {
 	autoSaving     sync.Map // waiting-file name -> struct{} while save is in flight
 	autoSaveFailed sync.Map // waiting-file name -> struct{} after a failed auto-save attempt
 	autoSaveDirBad string   // destination dir last logged as unusable; avoids log spam
+
+	operationWorkers sync.WaitGroup
+	// ponytail: one lock is enough for rare user mutations; add a queue only if cancellation or prioritization becomes necessary.
+	operationMu sync.Mutex
+}
+
+func (a *App) runExitNodeChange(operation func(context.Context) error, done func(error)) {
+	a.spin()
+	a.operationWorkers.Add(1)
+	go func() {
+		defer a.operationWorkers.Done()
+		a.operationMu.Lock()
+		defer a.operationMu.Unlock()
+		base := a.ctx
+		if base == nil {
+			base = context.Background()
+		}
+		ctx, cancel := context.WithTimeout(base, 30*time.Second)
+		defer cancel()
+		err := operation(ctx)
+		if err == nil {
+			select {
+			case <-ctx.Done():
+			case <-a.poller.Poll():
+			}
+		}
+		glib.IdleAdd(func() {
+			if done != nil {
+				done(err)
+			}
+		})
+		a.stopSpin()
+	}()
 }
 
 func (a *App) clip(v *glib.Value) {
@@ -168,6 +202,7 @@ func (a *App) update(status tsutil.Status) {
 }
 
 func (a *App) init(ctx context.Context) {
+	a.ctx = ctx
 	gtk.Init()
 
 	a.app = adw.NewApplication(metadata.AppID, gio.ApplicationHandlesOpen)
@@ -295,17 +330,17 @@ func (a *App) onAppActivate(ctx context.Context) {
 
 	useExitNodeAction := gio.NewSimpleActionStateful("use_exit_node", nil, glib.NewVariantBoolean(false))
 	useExitNodeAction.ConnectChangeState(func(state *glib.Variant) {
-		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-
 		s := state.Boolean()
-		err := tsutil.SetUseExitNode(ctx, s)
-		if err != nil {
-			slog.Error("failed to set exit node state", "state", s, "err", err)
-			if a.win != nil {
-				a.win.Toast(locale.Get("Failed to toggle exit node"))
+		a.runExitNodeChange(func(ctx context.Context) error {
+			return a.setUseExitNode(ctx, s)
+		}, func(err error) {
+			if err != nil {
+				slog.Error("failed to set exit node state", "state", s, "err", err)
+				if a.win != nil {
+					a.win.Toast(locale.Get("Failed to toggle exit node"))
+				}
 			}
-		}
+		})
 	})
 	useExitNodeAction.SetEnabled(false)
 	a.app.AddAction(useExitNodeAction)
@@ -442,23 +477,22 @@ func (a *App) initTray(ctx context.Context) {
 
 		OnExitToggle: func() {
 			glib.IdleAdd(func() {
-				ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-				defer cancel()
-
 				s := <-a.poller.GetIPN()
 				toggle := !s.ExitNodeActive()
-				err := tsutil.SetUseExitNode(ctx, toggle)
-				if err != nil {
-					a.notify(locale.Get("Toggle exit node"), err.Error())
-					slog.Error("toggle exit node from tray", "err", err)
-					return
-				}
-
-				if toggle {
-					a.notify(locale.Get("Exit node"), locale.Get("Enabled"))
-					return
-				}
-				a.notify(locale.Get("Exit node"), locale.Get("Disabled"))
+				a.runExitNodeChange(func(ctx context.Context) error {
+					return a.setUseExitNode(ctx, toggle)
+				}, func(err error) {
+					if err != nil {
+						a.notify(locale.Get("Toggle exit node"), err.Error())
+						slog.Error("toggle exit node from tray", "err", err)
+						return
+					}
+					if toggle {
+						a.notify(locale.Get("Exit node"), locale.Get("Enabled"))
+						return
+					}
+					a.notify(locale.Get("Exit node"), locale.Get("Disabled"))
+				})
 			})
 		},
 
@@ -477,7 +511,7 @@ func (a *App) initTray(ctx context.Context) {
 		},
 
 		OnQuit: func() {
-			a.Quit()
+			glib.IdleAdd(a.Quit)
 		},
 	}
 
@@ -489,8 +523,12 @@ func (a *App) initTray(ctx context.Context) {
 
 // Quit exits the app completely, causing Run to return.
 func (a *App) Quit() {
-	a.tray.Close()
-	a.app.Quit()
+	if a.tray != nil {
+		_ = a.tray.Close()
+	}
+	if a.app != nil {
+		a.app.Quit()
+	}
 }
 
 // Run runs the app, initializing everything and then entering the
@@ -501,7 +539,8 @@ func (a *App) Run(ctx context.Context) {
 	defer cancel()
 
 	a.init(ctx)
-	context.AfterFunc(ctx, a.Quit)
+	stopQuit := context.AfterFunc(ctx, func() { glib.IdleAdd(a.Quit) })
+	defer stopQuit()
 
 	err := a.app.Register(ctx)
 	if err != nil {
@@ -513,7 +552,35 @@ func (a *App) Run(ctx context.Context) {
 		Interval: a.getInterval(),
 		New:      func(s tsutil.Status) { glib.IdleAdd(func() { a.update(s) }) },
 	}
-	go a.poller.Run(ctx)
+	a.updateAutoSwitchSettings()
+	overrideDone := make(chan struct{})
+	go func() {
+		defer close(overrideDone)
+		a.watchAutoSwitchOverrides(ctx)
+	}()
+	pollerDone := make(chan struct{})
+	go func() {
+		defer close(pollerDone)
+		a.poller.Run(ctx)
+	}()
 
 	a.app.Run(os.Args)
+	stopQuit()
+	cancel()
+	a.operationWorkers.Wait()
+	<-pollerDone
+	<-overrideDone
+}
+
+func (a *App) watchAutoSwitchOverrides(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-a.poller.AutoSwitchOverrides():
+			glib.IdleAdd(func() {
+				a.setHealthChecksEnabled(false)
+			})
+		}
+	}
 }

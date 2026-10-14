@@ -29,14 +29,20 @@ type MullvadPage struct {
 	app       *App
 	stackPage *adw.ViewStackPage
 
-	Page         *adw.StatusPage
-	SearchEntry  *gtk.SearchEntry
-	LocationList *gtk.ListBox
-	EmptyLabel   *gtk.Label
+	Page                     *adw.StatusPage
+	SearchEntry              *gtk.SearchEntry
+	LocationList             *gtk.ListBox
+	EmptyLabel               *gtk.Label
+	AutomaticExitNodeRow     *adw.SwitchRow
+	HealthCheckedExitNodeRow *adw.SwitchRow
+	AutoSwitchStatus         *gtk.Label
+	LastAutoSwitchStatus     *gtk.Label
 
-	locations    map[string]*adw.ExpanderRow
-	exitNodes    map[tailcfg.StableNodeID]*mullvadExitNodeRow
-	searchTokens []string
+	locations       map[string]*adw.ExpanderRow
+	exitNodes       map[tailcfg.StableNodeID]*mullvadExitNodeRow
+	searchTokens    []string
+	healthAvailable bool
+	modeChanging    bool
 }
 
 func NewMullvadPage(a *App, status *tsutil.IPNStatus) *MullvadPage {
@@ -46,6 +52,7 @@ func NewMullvadPage(a *App, status *tsutil.IPNStatus) *MullvadPage {
 		exitNodes: make(map[tailcfg.StableNodeID]*mullvadExitNodeRow),
 	}
 	gutil.FillFromUI(&page, mullvadPageXML)
+	page.connectModeRows()
 
 	page.LocationList.SetSortFunc(func(r1, r2 *gtk.ListBoxRow) int {
 		return page.compareListRows(r1, r2)
@@ -104,6 +111,53 @@ func (page *MullvadPage) expanderTitle(row *gtk.ListBoxRow) string {
 	return row.Name()
 }
 
+func (page *MullvadPage) connectModeRows() {
+	automatic := page.AutomaticExitNodeRow.ActivatableWidget().(*gtk.Switch)
+	automatic.ConnectStateSet(func(active bool) bool {
+		if active == automatic.State() {
+			return false
+		}
+		mode := tsutil.ExitNodeModeSpecific
+		if active {
+			mode = tsutil.ExitNodeModeAutomatic
+		}
+		page.changeExitNodeMode(mode)
+		return true
+	})
+
+	health := page.HealthCheckedExitNodeRow.ActivatableWidget().(*gtk.Switch)
+	health.ConnectStateSet(func(active bool) bool {
+		if active == health.State() {
+			return false
+		}
+		mode := tsutil.ExitNodeModeSpecific
+		if active {
+			mode = tsutil.ExitNodeModeHealthChecked
+		}
+		page.changeExitNodeMode(mode)
+		return true
+	})
+}
+
+func (page *MullvadPage) changeExitNodeMode(mode tsutil.ExitNodeMode) {
+	page.modeChanging = true
+	page.AutomaticExitNodeRow.SetSensitive(false)
+	page.HealthCheckedExitNodeRow.SetSensitive(false)
+	page.app.runExitNodeChange(func(ctx context.Context) error {
+		return page.app.setExitNodeMode(ctx, mode)
+	}, func(err error) {
+		page.modeChanging = false
+		page.AutomaticExitNodeRow.SetSensitive(true)
+		page.HealthCheckedExitNodeRow.SetSensitive(page.healthAvailable)
+		if err != nil {
+			slog.Error("set exit node mode", "mode", mode, "err", err)
+			if page.app.win != nil {
+				page.app.win.Toast(fmt.Sprintf("Failed to change exit-node mode: %v", err))
+			}
+		}
+	})
+}
+
 func (page *MullvadPage) Widget() gtk.Widgetter {
 	return page.Page
 }
@@ -135,6 +189,14 @@ func (page *MullvadPage) Update(s tsutil.Status) bool {
 		return false
 	}
 
+	page.healthAvailable = page.app.settings != nil
+	page.AutomaticExitNodeRow.SetSensitive(!page.modeChanging)
+	page.HealthCheckedExitNodeRow.SetSensitive(page.healthAvailable && !page.modeChanging)
+
+	mode := status.ExitNodeMode()
+	setSwitchState(page.AutomaticExitNodeRow, mode == tsutil.ExitNodeModeAutomatic)
+	setSwitchState(page.HealthCheckedExitNodeRow, mode == tsutil.ExitNodeModeHealthChecked)
+
 	var exitNodeID tailcfg.StableNodeID
 	if exitNode := status.ExitNode(); exitNode.Valid() {
 		exitNodeID = exitNode.StableID()
@@ -145,9 +207,11 @@ func (page *MullvadPage) Update(s tsutil.Status) bool {
 	found := make(set.Set[tailcfg.StableNodeID])
 	nodesChanged := false
 	for id, peer := range status.Peers {
-		if tsutil.IsMullvad(peer) {
+		hi := peer.Hostinfo()
+		if tsutil.IsMullvad(peer) && hi.Valid() && hi.Location().Valid() {
 			found.Add(id)
-			exitNode := id == exitNodeID
+			currentExitNode := id == exitNodeID
+			explicitlySelected := currentExitNode && mode == tsutil.ExitNodeModeSpecific
 
 			_, existed := page.exitNodes[id]
 			row := page.getExitNodeRow(peer)
@@ -156,14 +220,13 @@ func (page *MullvadPage) Update(s tsutil.Status) bool {
 			}
 			row.peer = peer
 			sw := row.row.ActivatableWidget().(*gtk.Switch)
-			sw.SetState(exitNode)
-			sw.SetActive(exitNode)
+			sw.SetState(explicitlySelected)
+			sw.SetActive(explicitlySelected)
 
-			loc := peer.Hostinfo().Location()
+			loc := hi.Location()
 			countryCode := loc.CountryCode()
 			page.locations[countryCode].SetSubtitle("")
-
-			if exitNode {
+			if currentExitNode {
 				exitNodeCountryCode = countryCode
 				exitLoc = loc
 			}
@@ -176,7 +239,7 @@ func (page *MullvadPage) Update(s tsutil.Status) bool {
 			nodesChanged = true
 		}
 	}
-
+	page.updateAutoSwitchStatus(status)
 	if exitNodeCountryCode != "" {
 		page.locations[exitNodeCountryCode].SetSubtitle(locale.Get("Current exit node location"))
 		page.stackPage.SetTitle(mullvadLongLocationName(exitLoc))
@@ -299,6 +362,89 @@ func mullvadSearchFields(peer tailcfg.NodeView) iter.Seq[string] {
 	}
 }
 
+func (page *MullvadPage) updateAutoSwitchStatus(status *tsutil.IPNStatus) {
+	current := "none"
+	if exitNode := status.ExitNode(); exitNode.Valid() {
+		current = strings.TrimSuffix(exitNode.Name(), ".")
+		if hi := exitNode.Hostinfo(); hi.Valid() && hi.Hostname() != "" {
+			current = hi.Hostname()
+		}
+	}
+	runtime := status.AutoSwitch
+	switch status.ExitNodeMode() {
+	case tsutil.ExitNodeModeAutomatic:
+		page.AutoSwitchStatus.SetText(fmt.Sprintf("Exit node: Automatic | Current: %s | Managed by Tailscale", current))
+	case tsutil.ExitNodeModeHealthChecked:
+		page.AutoSwitchStatus.SetText(fmt.Sprintf("Exit node: Automatic with connection checks | Current: %s | %s", current, autoSwitchDisplayText(runtime)))
+	case tsutil.ExitNodeModeSpecific:
+		page.AutoSwitchStatus.SetText(fmt.Sprintf("Exit node: Specific | Current: %s", current))
+	default:
+		page.AutoSwitchStatus.SetText("Exit node: off")
+	}
+
+	last := runtime.LastEvent
+	if last.Time.IsZero() {
+		page.LastAutoSwitchStatus.SetText("Last auto-switch: never")
+		return
+	}
+	text := fmt.Sprintf(
+		"Last automatic change: %s | %s -> %s | %s",
+		last.Time.Format("2006-01-02 15:04:05"),
+		last.From,
+		last.To,
+		autoSwitchOutcomeText(last.Outcome),
+	)
+	if last.Error != "" {
+		text += " | " + last.Error
+	}
+	page.LastAutoSwitchStatus.SetText(text)
+}
+
+func setSwitchState(row *adw.SwitchRow, active bool) {
+	sw := row.ActivatableWidget().(*gtk.Switch)
+	sw.SetState(active)
+	sw.SetActive(active)
+}
+
+func autoSwitchDisplayText(runtime tsutil.AutoSwitchRuntime) string {
+	switch runtime.Mode {
+	case tsutil.AutoSwitchGrace:
+		return "Connection checks will start shortly"
+	case tsutil.AutoSwitchMonitoring:
+		if runtime.LastProbeOK {
+			return "Exit-node connection is healthy"
+		}
+		return "Connection checks are active"
+	case tsutil.AutoSwitchSuspect:
+		return "Checking a possible connection failure"
+	case tsutil.AutoSwitchSwitching:
+		return "Changing to another Mullvad exit node"
+	case tsutil.AutoSwitchVerifying:
+		return "Checking the replacement exit node"
+	case tsutil.AutoSwitchRollingBack:
+		return "Returning to the previous exit node"
+	case tsutil.AutoSwitchBackoff:
+		return "Paused after an unsuccessful change"
+	case tsutil.AutoSwitchWaiting:
+		return "Waiting for Tailscale and a Mullvad exit node"
+	default:
+		return "Connection checks are off"
+	}
+}
+
+func autoSwitchOutcomeText(outcome string) string {
+	switch outcome {
+	case "verified":
+		return "successful"
+	case "rolled-back":
+		return "returned to previous exit node"
+	case "unverified":
+		return "could not be verified"
+	default:
+		return "unsuccessful"
+	}
+}
+
 func (page *MullvadPage) getLocationRow(loc tailcfg.LocationView) *adw.ExpanderRow {
 	if row, ok := page.locations[loc.CountryCode()]; ok {
 		return row
@@ -344,24 +490,25 @@ func (page *MullvadPage) getExitNodeRow(peer tailcfg.NodeView) *mullvadExitNodeR
 			return false
 		}
 
-		if s {
-			err := tsutil.AdvertiseExitNode(context.TODO(), false)
-			if err != nil {
-				slog.Error("disable exit node advertisement", "err", err)
-				// Continue anyways.
-			}
-		}
-
 		var node tailcfg.StableNodeID
 		if s {
 			node = peer.StableID()
 		}
-		err := tsutil.ExitNode(context.TODO(), node)
-		if err != nil {
-			slog.Error("set exit node", "err", err)
-			sw.SetActive(!s)
-			return true
-		}
+		row.SetSensitive(false)
+		page.app.runExitNodeChange(func(ctx context.Context) error {
+			if s {
+				if err := tsutil.AdvertiseExitNode(ctx, false); err != nil {
+					slog.Error("disable exit node advertisement", "err", err)
+				}
+			}
+			return page.app.setSpecificExitNode(ctx, node)
+		}, func(err error) {
+			row.SetSensitive(true)
+			if err != nil {
+				slog.Error("set exit node", "err", err)
+				sw.SetActive(sw.State())
+			}
+		})
 		return true
 	})
 

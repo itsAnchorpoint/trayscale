@@ -13,6 +13,24 @@
             <property name="orientation">vertical</property>
             <property name="spacing">12</property>
             <child>
+              <object class="AdwPreferencesGroup">
+                <property name="description">Choose who manages the active exit node</property>
+                <property name="title">Exit Node Mode</property>
+                <child>
+                  <object class="AdwSwitchRow" id="AutomaticExitNodeRow">
+                    <property name="subtitle">Tailscale chooses from all permitted exit nodes and keeps working when Trayscale is closed</property>
+                    <property name="title">Automatic</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="AdwSwitchRow" id="HealthCheckedExitNodeRow">
+                    <property name="subtitle">Trayscale checks real internet access and switches between Mullvad nodes</property>
+                    <property name="title">Automatic with Connection Checks</property>
+                  </object>
+                </child>
+              </object>
+            </child>
+            <child>
               <object class="GtkSearchEntry" id="SearchEntry">
                 <property name="hexpand">True</property>
                 <property name="placeholder-text">Search locations</property>
@@ -31,6 +49,26 @@
                 <property name="label" translatable="yes">No matching exit nodes</property>
                 <property name="margin-top">24</property>
                 <property name="visible">False</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkLabel" id="AutoSwitchStatus">
+                <property name="halign">start</property>
+                <property name="label">Exit node: off</property>
+                <property name="margin-start">12</property>
+                <property name="margin-end">12</property>
+                <property name="wrap">True</property>
+                <property name="xalign">0</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkLabel" id="LastAutoSwitchStatus">
+                <property name="halign">start</property>
+                <property name="label">Last auto-switch: never</property>
+                <property name="margin-start">12</property>
+                <property name="margin-end">12</property>
+                <property name="wrap">True</property>
+                <property name="xalign">0</property>
               </object>
             </child>
           </object>

@@ -11,6 +11,7 @@ require (
 	github.com/klauspost/compress v1.20.1
 	github.com/leonelquinteros/gotext v1.7.2
 	github.com/stretchr/testify v1.12.1
+	golang.org/x/net v0.61.0
 	tailscale.com v1.104.1
 )
 
@@ -269,7 +270,6 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20260811152304-ee035b5b010f // indirect
 	golang.org/x/image v0.47.0 // indirect
 	golang.org/x/mod v0.42.0 // indirect
-	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect

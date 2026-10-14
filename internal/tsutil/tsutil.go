@@ -47,13 +47,26 @@ func ComparePeers(p1, p2 tailcfg.NodeView) int {
 	i1 := p1.Hostinfo()
 	i2 := p2.Hostinfo()
 
+	var hostname1, hostname2 string
 	loc := 0
-	if i1.Location().Valid() && i2.Location().Valid() {
+	if i1.Valid() {
+		hostname1 = i1.Hostname()
+	}
+	if i2.Valid() {
+		hostname2 = i2.Hostname()
+	}
+	if hostname1 == "" {
+		hostname1 = p1.Name()
+	}
+	if hostname2 == "" {
+		hostname2 = p2.Name()
+	}
+	if i1.Valid() && i2.Valid() && i1.Location().Valid() && i2.Location().Valid() {
 		loc = CompareLocations(i1.Location(), i2.Location())
 	}
 	return cmp.Or(
 		loc,
-		cmp.Compare(i1.Hostname(), i2.Hostname()),
+		cmp.Compare(hostname1, hostname2),
 		cmp.Compare(p1.ID(), p2.ID()),
 	)
 }
