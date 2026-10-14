@@ -246,7 +246,6 @@ func (a *App) init(ctx context.Context) {
 		a.onAppActivate(ctx)
 	})
 
-	a.initSettings(ctx)
 }
 
 func (a *App) startTS(ctx context.Context) error {
@@ -550,6 +549,7 @@ func (a *App) Run(ctx context.Context) {
 		a.app.Run(os.Args)
 		return
 	}
+	a.initSettings(ctx)
 
 	a.poller = &tsutil.Poller{
 		Interval: a.getInterval(),

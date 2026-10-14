@@ -2,7 +2,7 @@
 
 pkgname=trayscale-anchorpoint
 pkgver=0.20.0
-pkgrel=4
+pkgrel=5
 pkgdesc='Trayscale with Automatic exit-node modes and verified Mullvad failover'
 arch=('x86_64')
 url='https://github.com/itsAnchorpoint/trayscale'
