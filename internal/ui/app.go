@@ -545,6 +545,11 @@ func (a *App) Run(ctx context.Context) {
 		slog.Error("register application", "err", err)
 		return
 	}
+	if a.app.IsRemote() {
+		// Forward activation without starting a second connection supervisor.
+		a.app.Run(os.Args)
+		return
+	}
 
 	a.poller = &tsutil.Poller{
 		Interval: a.getInterval(),

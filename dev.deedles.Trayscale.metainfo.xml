@@ -55,11 +55,12 @@
 	<content_rating type="oars-1.1" />
 
 	<releases>
-		<release version="v0.20.0-anchorpoint.3" date="2026-10-14">
+		<release version="v0.20.0-anchorpoint.4" date="2026-10-14">
 			<description>
 				<ul>
 					<li>Restore custom exit-node modes and verified Mullvad failover on upstream v0.20.0.</li>
 					<li>Keep manual choices ahead of automatic recovery and reconnect after daemon restarts.</li>
+					<li>Prevent repeated launches from starting a second connection supervisor.</li>
 					<li>Provide a separately named Arch package to preserve the fork through upstream updates.</li>
 				</ul>
 			</description>
