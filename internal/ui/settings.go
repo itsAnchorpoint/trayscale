@@ -192,8 +192,8 @@ func (a *App) showAbout() {
 	dialog.SetLicenseType(gtk.LicenseCustom)
 	dialog.SetApplicationIcon(metadata.AppID)
 	dialog.SetApplicationName("Trayscale")
-	dialog.SetWebsite("https://github.com/DeedleFake/trayscale")
-	dialog.SetIssueURL("https://github.com/DeedleFake/trayscale/issues")
+	dialog.SetWebsite("https://github.com/itsAnchorpoint/trayscale")
+	dialog.SetIssueURL("https://github.com/itsAnchorpoint/trayscale/issues")
 
 	rnv, rn := metadata.ReleaseNotes()
 	dialog.SetReleaseNotesVersion(rnv)

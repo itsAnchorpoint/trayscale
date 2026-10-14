@@ -31,7 +31,7 @@ type persistedAutoSwitchState struct {
 	ManagedID    string                       `json:"managedID,omitempty"`
 	LastEvent    AutoSwitchEvent              `json:"lastEvent"`
 	Quarantine   map[string]time.Time         `json:"quarantine,omitempty"`
-	BackoffUntil time.Time                    `json:"backoffUntil,omitempty"`
+	BackoffUntil time.Time                    `json:"backoffUntil"`
 	Pending      *persistedAutoSwitchIncident `json:"pending,omitempty"`
 }
 

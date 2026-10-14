@@ -9,6 +9,7 @@ on:
   push:
     branches:
       - master
+      - anchorpoint
   pull_request:
 
 jobs:

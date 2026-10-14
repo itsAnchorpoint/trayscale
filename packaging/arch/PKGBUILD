@@ -1,0 +1,35 @@
+# Maintainer: itsAnchorpoint <83099125+itsAnchorpoint@users.noreply.github.com>
+
+pkgname=trayscale-anchorpoint
+pkgver=0.20.0
+pkgrel=1
+pkgdesc='Trayscale with Automatic exit-node modes and verified Mullvad failover'
+arch=('x86_64')
+url='https://github.com/itsAnchorpoint/trayscale'
+license=('MIT')
+depends=('gtk4' 'libadwaita>=1:1.9')
+makedepends=('git' 'go' 'gobject-introspection')
+optdepends=('tailscale>=1.100: daemon that manages connection')
+provides=("trayscale=$pkgver")
+conflicts=('trayscale')
+options=('!strip')
+_tag="v${pkgver}-anchorpoint.${pkgrel}"
+source=("trayscale::git+https://github.com/itsAnchorpoint/trayscale.git#tag=$_tag")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/trayscale"
+  ./dist.sh build "$_tag"
+}
+
+check() {
+  cd "$srcdir/trayscale"
+  go test -vet=all ./...
+  glib-compile-schemas --strict --dry-run .
+}
+
+package() {
+  cd "$srcdir/trayscale"
+  ./dist.sh install "$pkgdir/usr"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

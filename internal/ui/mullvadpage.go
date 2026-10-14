@@ -152,7 +152,7 @@ func (page *MullvadPage) changeExitNodeMode(mode tsutil.ExitNodeMode) {
 		if err != nil {
 			slog.Error("set exit node mode", "mode", mode, "err", err)
 			if page.app.win != nil {
-				page.app.win.Toast(fmt.Sprintf("Failed to change exit-node mode: %v", err))
+				page.app.win.Toast(locale.Get("Failed to change exit-node mode: %v", err))
 			}
 		}
 	})
@@ -363,7 +363,7 @@ func mullvadSearchFields(peer tailcfg.NodeView) iter.Seq[string] {
 }
 
 func (page *MullvadPage) updateAutoSwitchStatus(status *tsutil.IPNStatus) {
-	current := "none"
+	current := locale.Get("none")
 	if exitNode := status.ExitNode(); exitNode.Valid() {
 		current = strings.TrimSuffix(exitNode.Name(), ".")
 		if hi := exitNode.Hostinfo(); hi.Valid() && hi.Hostname() != "" {
@@ -373,21 +373,21 @@ func (page *MullvadPage) updateAutoSwitchStatus(status *tsutil.IPNStatus) {
 	runtime := status.AutoSwitch
 	switch status.ExitNodeMode() {
 	case tsutil.ExitNodeModeAutomatic:
-		page.AutoSwitchStatus.SetText(fmt.Sprintf("Exit node: Automatic | Current: %s | Managed by Tailscale", current))
+		page.AutoSwitchStatus.SetText(locale.Get("Exit node: Automatic | Current: %s | Managed by Tailscale", current))
 	case tsutil.ExitNodeModeHealthChecked:
-		page.AutoSwitchStatus.SetText(fmt.Sprintf("Exit node: Automatic with connection checks | Current: %s | %s", current, autoSwitchDisplayText(runtime)))
+		page.AutoSwitchStatus.SetText(locale.Get("Exit node: Automatic with connection checks | Current: %s | %s", current, autoSwitchDisplayText(runtime)))
 	case tsutil.ExitNodeModeSpecific:
-		page.AutoSwitchStatus.SetText(fmt.Sprintf("Exit node: Specific | Current: %s", current))
+		page.AutoSwitchStatus.SetText(locale.Get("Exit node: Specific | Current: %s", current))
 	default:
-		page.AutoSwitchStatus.SetText("Exit node: off")
+		page.AutoSwitchStatus.SetText(locale.Get("Exit node: off"))
 	}
 
 	last := runtime.LastEvent
 	if last.Time.IsZero() {
-		page.LastAutoSwitchStatus.SetText("Last auto-switch: never")
+		page.LastAutoSwitchStatus.SetText(locale.Get("Last auto-switch: never"))
 		return
 	}
-	text := fmt.Sprintf(
+	text := locale.Get(
 		"Last automatic change: %s | %s -> %s | %s",
 		last.Time.Format("2006-01-02 15:04:05"),
 		last.From,
@@ -409,39 +409,39 @@ func setSwitchState(row *adw.SwitchRow, active bool) {
 func autoSwitchDisplayText(runtime tsutil.AutoSwitchRuntime) string {
 	switch runtime.Mode {
 	case tsutil.AutoSwitchGrace:
-		return "Connection checks will start shortly"
+		return locale.Get("Connection checks will start shortly")
 	case tsutil.AutoSwitchMonitoring:
 		if runtime.LastProbeOK {
-			return "Exit-node connection is healthy"
+			return locale.Get("Exit-node connection is healthy")
 		}
-		return "Connection checks are active"
+		return locale.Get("Connection checks are active")
 	case tsutil.AutoSwitchSuspect:
-		return "Checking a possible connection failure"
+		return locale.Get("Checking a possible connection failure")
 	case tsutil.AutoSwitchSwitching:
-		return "Changing to another Mullvad exit node"
+		return locale.Get("Changing to another Mullvad exit node")
 	case tsutil.AutoSwitchVerifying:
-		return "Checking the replacement exit node"
+		return locale.Get("Checking the replacement exit node")
 	case tsutil.AutoSwitchRollingBack:
-		return "Returning to the previous exit node"
+		return locale.Get("Returning to the previous exit node")
 	case tsutil.AutoSwitchBackoff:
-		return "Paused after an unsuccessful change"
+		return locale.Get("Paused after an unsuccessful change")
 	case tsutil.AutoSwitchWaiting:
-		return "Waiting for Tailscale and a Mullvad exit node"
+		return locale.Get("Waiting for Tailscale and a Mullvad exit node")
 	default:
-		return "Connection checks are off"
+		return locale.Get("Connection checks are off")
 	}
 }
 
 func autoSwitchOutcomeText(outcome string) string {
 	switch outcome {
 	case "verified":
-		return "successful"
+		return locale.Get("successful")
 	case "rolled-back":
-		return "returned to previous exit node"
+		return locale.Get("returned to previous exit node")
 	case "unverified":
-		return "could not be verified"
+		return locale.Get("could not be verified")
 	default:
-		return "unsuccessful"
+		return locale.Get("unsuccessful")
 	}
 }
 

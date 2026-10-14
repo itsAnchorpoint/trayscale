@@ -1,0 +1,5 @@
+/src/
+/pkg/
+/trayscale/
+/*.pkg.tar.*
+/.SRCINFO

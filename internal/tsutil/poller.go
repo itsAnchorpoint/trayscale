@@ -73,11 +73,9 @@ func (p *Poller) Run(ctx context.Context) {
 
 	n := newNotifier()
 	run := func(f func(context.Context)) {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			f(ctx)
-		}()
+		})
 	}
 	run(p.autoSwitch.Run)
 	run(p.watchIPN)

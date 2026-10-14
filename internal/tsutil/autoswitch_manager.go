@@ -956,15 +956,13 @@ func (l *autoSwitchLoop) startProbe(ctx context.Context, kind autoSwitchProbeKin
 		probeCtx, cancel = context.WithDeadline(ctx, l.verifyDeadline)
 	}
 	l.cancel = cancel
-	l.operationWorkers.Add(1)
-	go func() {
-		defer l.operationWorkers.Done()
+	l.operationWorkers.Go(func() {
 		result := probeExitPath(probeCtx, l.manager.ops, probeTarget, checkDNS)
 		select {
 		case l.probeResults <- autoSwitchProbeEvent{generation: generation, kind: kind, result: result}:
 		case <-ctx.Done():
 		}
-	}()
+	})
 }
 
 func (l *autoSwitchLoop) handleProbeResult(event autoSwitchProbeEvent, now time.Time) {
@@ -1111,15 +1109,13 @@ func (l *autoSwitchLoop) startCandidateSelection(ctx context.Context) {
 	quarantine := maps.Clone(l.quarantine)
 	selectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	l.cancel = cancel
-	l.operationWorkers.Add(1)
-	go func() {
-		defer l.operationWorkers.Done()
+	l.operationWorkers.Go(func() {
 		peer, err := selectAutoSwitchCandidate(selectCtx, l.manager.ops, snapshot, quarantine, time.Now())
 		select {
 		case l.candidateResults <- autoSwitchCandidateEvent{generation: generation, peer: peer, err: err}:
 		case <-ctx.Done():
 		}
-	}()
+	})
 }
 
 func (l *autoSwitchLoop) handleCandidateResult(ctx context.Context, event autoSwitchCandidateEvent, now time.Time) {
@@ -1171,9 +1167,7 @@ func (l *autoSwitchLoop) startApply(ctx context.Context, target tailcfg.NodeView
 	l.cancel = cancel
 	epoch := l.incidentEpoch
 	rollback := l.runtime.Mode == AutoSwitchRollingBack
-	l.operationWorkers.Add(1)
-	go func() {
-		defer l.operationWorkers.Done()
+	l.operationWorkers.Go(func() {
 		var err error
 		writeAttempted := false
 		if !rollback {
@@ -1212,7 +1206,7 @@ func (l *autoSwitchLoop) startApply(ctx context.Context, target tailcfg.NodeView
 		case l.applyResults <- autoSwitchApplyEvent{generation: generation, target: target, rollback: rollback, err: err}:
 		case <-ctx.Done():
 		}
-	}()
+	})
 }
 
 func (l *autoSwitchLoop) handleApplyResult(event autoSwitchApplyEvent, now time.Time) {

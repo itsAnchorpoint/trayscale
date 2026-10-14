@@ -34,19 +34,15 @@ func (s *IPNStatus) ExitNodeMode() ExitNodeMode {
 
 func automaticExitNodeMaskedPrefs() *ipn.MaskedPrefs {
 	return &ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			AutoExitNode: ipn.AnyExitNode,
-		},
+		AutoExitNode:    ipn.AnyExitNode,
 		AutoExitNodeSet: true,
 	}
 }
 
 func specificExitNodeMaskedPrefs(peer tailcfg.StableNodeID) *ipn.MaskedPrefs {
 	return &ipn.MaskedPrefs{
-		Prefs: ipn.Prefs{
-			ExitNodeID: peer,
-			ExitNodeIP: netip.Addr{},
-		},
+		ExitNodeID:      peer,
+		ExitNodeIP:      netip.Addr{},
 		ExitNodeIDSet:   true,
 		ExitNodeIPSet:   true,
 		AutoExitNodeSet: true,

@@ -159,7 +159,7 @@ Tests live next to the code they cover (`*_test.go`). Coverage is currently spar
 
 ## Agent guidelines
 
-1. **Git is read-only under all circumstances.** Never create commits, amend, rebase, merge, cherry-pick, stash, checkout branches, reset, clean, tag, push, or otherwise mutate the git repository or index. Read-only commands (`status`, `diff`, `log`, `show`, `blame`, etc.) are fine. Leave all commits and branch management to the user.
+1. **Git writes require task authorization.** Commit, branch, merge, tag, or push when the user has requested that repository work. Otherwise leave changes uncommitted. Preserve existing work and never force-push or discard user changes without explicit authorization.
 2. **Read before writing** — match patterns in `internal/ui`, `internal/tsutil`, and existing gotk4 usage.
 3. **Do not pin versions in this file** (`AGENTS.md`) — refer to `go.mod` or unversioned dependency names so agent instructions stay valid as versions change. Pinning versions elsewhere (README, comments, code) is fine when appropriate.
 4. **Verify** with `go test -vet=all ./...` (and `go tool golangci-lint run --disable=errcheck` when practical) before considering work done. Do not run `go build` solely to check that the project compiles — `go test` already builds packages.
@@ -175,4 +175,4 @@ Tests live next to the code they cover (`*_test.go`). Coverage is currently spar
 - [ ] Metainfo still validates if `dev.deedles.Trayscale.metainfo.xml` changed
 - [ ] GSettings schema and desktop/metainfo App ID remain consistent
 - [ ] No secrets in the diff
-- [ ] No agent-created git commits or other git writes
+- [ ] Git writes stay within the user-authorized task

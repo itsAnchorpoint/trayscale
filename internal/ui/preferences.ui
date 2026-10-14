@@ -41,8 +41,8 @@
                     <property name="value">10.0</property>
                   </object>
                 </property>
-                <property name="subtitle">Seconds of continuously failed connection checks required before switching</property>
-                <property name="title">Failure Confirmation Time</property>
+                <property name="subtitle" translatable="yes">Seconds of continuously failed connection checks required before switching</property>
+                <property name="title" translatable="yes">Failure Confirmation Time</property>
               </object>
             </child>
             <child>
@@ -55,8 +55,8 @@
                     <property name="value">60.0</property>
                   </object>
                 </property>
-                <property name="subtitle">Seconds between TCP checks; DNS is also checked when Tailscale DNS is enabled</property>
-                <property name="title">Connection Check Interval</property>
+                <property name="subtitle" translatable="yes">Seconds between TCP checks; DNS is also checked when Tailscale DNS is enabled</property>
+                <property name="title" translatable="yes">Connection Check Interval</property>
               </object>
             </child>
           </object>

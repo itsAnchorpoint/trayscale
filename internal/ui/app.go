@@ -50,15 +50,13 @@ type App struct {
 	autoSaveDirBad string   // destination dir last logged as unusable; avoids log spam
 
 	operationWorkers sync.WaitGroup
-	// ponytail: one lock is enough for rare user mutations; add a queue only if cancellation or prioritization becomes necessary.
+	// Serialize user mutations so manual choices take precedence over recovery.
 	operationMu sync.Mutex
 }
 
 func (a *App) runExitNodeChange(operation func(context.Context) error, done func(error)) {
 	a.spin()
-	a.operationWorkers.Add(1)
-	go func() {
-		defer a.operationWorkers.Done()
+	a.operationWorkers.Go(func() {
 		a.operationMu.Lock()
 		defer a.operationMu.Unlock()
 		base := a.ctx
@@ -80,7 +78,7 @@ func (a *App) runExitNodeChange(operation func(context.Context) error, done func
 			}
 		})
 		a.stopSpin()
-	}()
+	})
 }
 
 func (a *App) clip(v *glib.Value) {

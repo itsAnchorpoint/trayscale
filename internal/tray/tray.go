@@ -237,7 +237,7 @@ func exitToggleText(status *tsutil.IPNStatus) string {
 }
 
 func autoSwitchText(status *tsutil.IPNStatus) string {
-	current := "none"
+	current := locale.Get("none")
 	if exitNode := status.ExitNode(); exitNode.Valid() {
 		current = exitNode.DisplayName(true)
 		if hi := exitNode.Hostinfo(); hi.Valid() && hi.Hostname() != "" {
@@ -246,12 +246,12 @@ func autoSwitchText(status *tsutil.IPNStatus) string {
 	}
 	switch status.ExitNodeMode() {
 	case tsutil.ExitNodeModeAutomatic:
-		return fmt.Sprintf("Exit node: Automatic - %s", current)
+		return locale.Get("Exit node: Automatic - %s", current)
 	case tsutil.ExitNodeModeHealthChecked:
-		return fmt.Sprintf("Exit node: %s - connection checks active", current)
+		return locale.Get("Exit node: %s - connection checks active", current)
 	case tsutil.ExitNodeModeSpecific:
-		return fmt.Sprintf("Exit node: %s", current)
+		return locale.Get("Exit node: %s", current)
 	default:
-		return "Exit node: Off"
+		return locale.Get("Exit node: Off")
 	}
 }

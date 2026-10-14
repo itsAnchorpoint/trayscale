@@ -246,7 +246,7 @@ func testDNSResponse(t *testing.T, rcode dnsmessage.RCode, withAnswer bool) []by
 	name, err := dnsmessage.NewName("example.com.")
 	require.NoError(t, err)
 	message := dnsmessage.Message{
-		Header:    dnsmessage.Header{Response: true, RCode: rcode},
+		Response: true, RCode: rcode,
 		Questions: []dnsmessage.Question{{Name: name, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}},
 	}
 	if withAnswer {
@@ -477,7 +477,7 @@ func TestVerificationFailureWaitsForHealthyUnderlay(t *testing.T) {
 func TestClassifyUnderlayProbe(t *testing.T) {
 	require.Equal(t, underlayProbeHealthy, classifyUnderlayProbe(&netcheck.Report{
 		UDP:           false,
-		RegionLatency: map[int]time.Duration{4: 40 * time.Millisecond},
+		RegionLatency: netcheck.RegionLatency{4: 40 * time.Millisecond},
 	}, nil).State)
 	require.Equal(t, underlayProbeUnhealthy, classifyUnderlayProbe(&netcheck.Report{}, nil).State)
 	require.Equal(t, underlayProbeInconclusive, classifyUnderlayProbe(nil, nil).State)
